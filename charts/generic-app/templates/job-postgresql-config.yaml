@@ -1,0 +1,88 @@
+{{- if .Values.jobs.postgresqlConfig.enabled -}}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ template "app.fullname" $ }}-postgresql-config-sql
+  labels:
+    app.kubernetes.io/name: {{ include "app.name" $ }}
+    app.kubernetes.io/version: {{ $.Chart.AppVersion }}
+    helm.sh/chart: {{ include "app.chart" $ }}
+    app.kubernetes.io/instance: {{ $.Release.Name }}
+    app.kubernetes.io/managed-by: {{ $.Release.Service }}
+data: 
+  config.sh: |
+    #!/bin/bash
+    set -e
+
+    EXISTS=$(psql -h $DB_HOST -p $DB_PORT -c "\du ${DB_USERNAME}" | grep ${DB_USERNAME} || echo 1)
+    if [ "${EXISTS}" = "1" ]
+    then
+        echo "[INFO] User Role does not exist, creating ..."
+        psql -h $DB_HOST -p $DB_PORT -c "CREATE ROLE ${DB_USERNAME} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE;"
+    else
+        echo "[INFO] User Role already exists, skipping creation ..."
+    fi
+    echo "[INFO] Configuring user ..."
+    psql -h $DB_HOST -p $DB_PORT -c "GRANT ${DB_USERNAME} TO ${PGUSER};"
+    psql -h $DB_HOST -p $DB_PORT -c "ALTER ROLE ${DB_USERNAME} PASSWORD '${DB_PASSWORD}';"
+    EXISTS=$(psql -h $DB_HOST -p $DB_PORT -c "\l ${DB_DATABASE_NAME}" | grep ${DB_DATABASE_NAME} || echo 1)
+    if [ "${EXISTS}" = "1" ]
+    then
+        echo "[INFO] Database does not exist, creating ..."
+        psql -h $DB_HOST -p $DB_PORT -c "CREATE DATABASE ${DB_DATABASE_NAME} OWNER ${DB_USERNAME};"
+    else
+        echo "[INFO] Database already exists, skipping creation ..."
+    fi
+    echo "[INFO] Configuring database ..."
+    psql -h $DB_HOST -p $DB_PORT -c "ALTER DATABASE ${DB_DATABASE_NAME} OWNER TO ${DB_USERNAME};"
+    echo "[INFO] Configuring extensions ..."
+    extensions=( $(echo $DB_EXTENSIONS | tr "," "\n") )
+    for extension in ${extensions[@]}
+    do
+      echo "[INFO] Configuring extension ${extension}..."
+      psql -h $DB_HOST -p $DB_PORT -d $DB_DATABASE_NAME -c "CREATE EXTENSION IF NOT EXISTS \"${extension}\";"
+    done
+    echo "[INFO] Database configuration finished"
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ template "app.fullname" . }}-postgresql-config
+  labels: 
+    app.kubernetes.io/name: {{ include "app.name" . }}
+    app.kubernetes.io/version: {{ .Chart.AppVersion }}
+    helm.sh/chart: {{ include "app.chart" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+  {{- with .Values.pods.annotations }}
+  {{ toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  completions: 1
+  backoffLimit: 10
+  ttlSecondsAfterFinished: 120
+  template:
+    spec:
+      containers: 
+        - name: {{ include "app.name" . }}
+          image: "{{ .Values.jobs.postgresqlConfig.image.name }}:{{ .Values.jobs.postgresqlConfig.image.tag }}"
+          imagePullPolicy: {{ .Values.jobs.postgresqlConfig.image.pullPolicy }}
+          command: ["/bin/bash", "-c"]
+          args: ["/scripts/config.sh"]
+          {{- with .Values.jobs.postgresqlConfig.env }}
+          env: {{ toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.jobs.postgresqlConfig.envFrom }}
+          envFrom: {{ toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: postgresql-config-sql
+              mountPath: /scripts
+      restartPolicy: Never
+      volumes:
+        - name: postgresql-config-sql
+          configMap:
+            name: {{ template "app.fullname" $ }}-postgresql-config-sql
+            defaultMode: 0777
+{{- end -}}

@@ -1,0 +1,10 @@
+---
+apiVersion: v1
+description: Generic Application Chart
+name: generic-app
+version: 1.0.2
+appVersion: userDefined
+home: https://gitlab.com/baxe1/helm-charts
+sources:
+  - https://gitlab.com/baxe1/helm-charts/tree/master/generic-app
+  - https://github.com/mvisonneau/helm-charts/tree/main/charts/generic-app # Original idea
